@@ -1,0 +1,19 @@
+# FastSpeech2 training / synthesis (pipeline.py). PyTorch: use the build that matches
+# your machine (Colab already has a CUDA build installed).
+torch
+numpy
+scipy
+soundfile>=0.12
+librosa
+pyworld
+tgt
+pyyaml
+tqdm
+matplotlib
+tensorboard
+scikit-learn
+unidecode
+inflect
+g2p_en
+pypinyin
+# Montreal Forced Aligner is installed separately (conda): `python pipeline.py install-mfa` on Colab/Linux

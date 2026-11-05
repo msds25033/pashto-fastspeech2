@@ -1,0 +1,33 @@
+dataset: "Pashto"
+
+path:
+  corpus_path: "./pashto_dataset"
+  lexicon_path: "lexicon/pashto-lexicon.txt"
+  raw_path: "./raw_data/Pashto"
+  preprocessed_path: "./preprocessed_data/Pashto"
+
+preprocessing:
+  val_size: 40 # number of UTTERANCES held out; ~6% of ~600 clips. Was 512 (LJSpeech has 13k).
+  text:
+    text_cleaners: ["pashto_cleaners"] # defined in text/cleaners.py (append pashto_cleaner_snippet.py). english_cleaners would turn Pashto into Latin junk
+    language: "ps" # only read by synthesize.py (needs a Pashto branch there)
+  audio:
+    sampling_rate: 22050
+    max_wav_value: 32768.0
+  stft:
+    filter_length: 1024
+    hop_length: 256
+    win_length: 1024
+  mel:
+    n_mel_channels: 80
+    mel_fmin: 0
+    mel_fmax: 8000 # please set to 8000 for HiFi-GAN vocoder, set to null for MelGAN vocoder
+  # phoneme_level + normalization, as in FastSpeech2's default LJSpeech config. With
+  # frame_level the unvoiced frames keep pitch 0 (only phoneme_level interpolates them),
+  # and the model's "log" pitch bins then start at log(0) -> NaN.
+  pitch:
+    feature: "phoneme_level" # support 'phoneme_level' or 'frame_level'
+    normalization: True
+  energy:
+    feature: "phoneme_level" # support 'phoneme_level' or 'frame_level'
+    normalization: True

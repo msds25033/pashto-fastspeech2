@@ -1,0 +1,20 @@
+path:
+  ckpt_path: "./output/ckpt/Pashto"
+  log_path: "./output/log/Pashto"
+  result_path: "./output/result/Pashto"
+optimizer:
+  batch_size: 16 # was 48; 30 s clips use far more memory than LJSpeech's ~10 s. Lower to 8 if you hit CUDA out-of-memory
+  betas: [0.9, 0.98]
+  eps: 0.000000001
+  weight_decay: 0.0
+  grad_clip_thresh: 1.0
+  grad_acc_step: 1
+  warm_up_step: 4000
+  anneal_steps: []
+  anneal_rate: 1.0
+step:
+  total_step: 100000 # was 160000; much smaller dataset. Checkpoints every 10000, keep the one with the best val loss
+  log_step: 100
+  synth_step: 1000
+  val_step: 1000
+  save_step: 10000

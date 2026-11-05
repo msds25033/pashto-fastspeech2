@@ -1,0 +1,3 @@
+# Hand-written pronunciations: word<TAB>phones. Merged into the lexicon by --extra-lexicon.
+# The hesitation sound "eh..." that speakers make while thinking (216 clips in your data).
+ېٔ	e

@@ -1,0 +1,7 @@
+# Sentences for `python pipeline.py synthesize`. One per line: output_name|Pashto text
+# ("#" lines are ignored). Words missing from the lexicon are skipped with a warning.
+#
+# seen: taken from clip 1_crop-001, one of the 4 demo training clips
+seen_1_crop-001|دَ ربیع الاول دَ میاشتې پسرلې ماشاء الله روان دے۔
+# unseen: from clip 10_crop-001, which the 4-clip demo model never hears
+unseen_10_crop-001|مونږه دې دنیا ته راغلی یُو۔ دا یو حقیقی خبره ده

@@ -1,0 +1,8 @@
+# created by pipeline.py
+FastSpeech2/
+bin/
+runs/*/audio/*.png
+__pycache__/
+*.pyc
+# dataset_tools working files
+_g2p_tmp*/

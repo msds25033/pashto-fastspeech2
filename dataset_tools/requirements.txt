@@ -1,0 +1,10 @@
+# Building the dataset from the source recordings (dataset_tools/). Run from the
+# cloned nemo-pashto-g2p-conformer folder, after `pip install -r requirements.txt` there
+# (torch, omegaconf, nemo_toolkit[asr,tts]).
+python-docx
+textgrid
+transformers
+torchaudio
+soundfile>=0.12
+scipy
+numpy
