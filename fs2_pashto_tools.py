@@ -243,6 +243,13 @@ PATCHES = [
         "                        \"Optim/learning_rate\", optimizer._optimizer.param_groups[0][\"lr\"], step\n"
         "                    )\n",
     )]),
+    # Energy targets reach the loss as float64 (normalised values become float64 under
+    # NumPy 2) while predictions are float32 -> "Found dtype Double but expected Float" in
+    # backward on CUDA. Pitch already had .float(); give energy the same.
+    ("utils/tools.py", "torch.from_numpy(energies).float()", [
+        ("energies = torch.from_numpy(energies).to(device)",
+         "energies = torch.from_numpy(energies).float().to(device)"),
+    ]),
     ("audio/stft.py", "Pashto patch: CPU fallback", [
         ("from librosa.filters import mel as librosa_mel_fn\n",
          "from librosa.filters import mel as librosa_mel_fn\n\n"

@@ -35,6 +35,8 @@ Results go to `runs/<run-name>/`.
 1. Push this folder to your git host, or zip it.
 2. Open `colab_train.ipynb` in Colab and pick a GPU runtime.
 3. Edit `REPO_URL` in the first cell, or upload the zip to `/content`.
+   For a private repo, first add a Colab secret `GITHUB_TOKEN`: a fine-grained GitHub token
+   with *Contents: Read-only* on this repo. Turn on its *Notebook access*.
 4. Run all cells.
 
 The notebook only calls `pipeline.py`. The same steps as commands:
@@ -128,6 +130,9 @@ match what it expects):
 - **`train.py`:** runs on a handful of clips (the original requires
   `batch_size × 4 < clips`) and logs the learning rate.
 - **`synthesize.py`:** adds a Pashto (`language: "ps"`) text front end and `--name`.
+- **`utils/tools.py`:** energy targets are cast to float32 like pitch. Without this,
+  normalised energy is float64 under NumPy 2, and training on a GPU fails with
+  `Found dtype Double but expected Float`.
 - **`utils/model.py`, `audio/stft.py`:** checkpoints load on CPU and with
   PyTorch ≥ 2.6 (`weights_only=False` for FastSpeech2's own checkpoints), and the
   STFT no longer requires CUDA.

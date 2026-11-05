@@ -395,7 +395,8 @@ def stage_metrics(args):
         ax.set_xlabel("step")
         ax.set_yscale("log")
         ax.grid(alpha=0.3)
-        ax.legend()
+        if ax.lines:
+            ax.legend()
     fig.suptitle(f"FastSpeech2 Pashto -- {args.run_name}: training vs validation losses (log scale)")
     fig.tight_layout()
     fig.savefig(out / "loss_curves.png", dpi=120)
