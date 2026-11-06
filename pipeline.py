@@ -3,8 +3,9 @@
 Pashto text-to-speech with ming024/FastSpeech2 -- the Colab notebook steps as
 one command-line tool. Run the stages in order, or all of them with `all`:
 
-  setup        clone FastSpeech2, patch it for Pashto and current libraries,
-               install the configs, lexicon, phone set and HiFi-GAN vocoder
+  setup        prepare the bundled FastSpeech2/ (already patched for Pashto; the
+               patches are re-applied idempotently), unzip the HiFi-GAN vocoder,
+               install the configs, lexicon and phone set
   install-mfa  (Linux / Colab) install Montreal Forced Aligner with micromamba
   corpus       write the aligner corpus (22.05 kHz wav + normalised .lab) for
                the selected clips
@@ -14,10 +15,12 @@ one command-line tool. Run the stages in order, or all of them with `all`:
   metrics      export losses / learning rate (CSV), curves (PNG), summary and
                the logged sample spectrograms + audio from TensorBoard
   synthesize   Pashto text -> wav with a trained checkpoint
+  overfit-test regenerate the training clips with a checkpoint and compare them
+               with the originals (audio side by side, spectrograms, metrics)
 
 Everything for one experiment (metrics, curves, logs, configs, audio) is
-collected in runs/<run-name>/. The FastSpeech2 checkout, corpus, features and
-checkpoints live in FastSpeech2/ (not committed).
+collected in runs/<run-name>/. FastSpeech2/ is ming024/FastSpeech2, bundled and
+patched; the corpus, features and checkpoints it generates are git-ignored.
 
 Demo on the 4 sample clips (see README.md for Colab):
     python pipeline.py all --clips "1_crop-00[1-4]" --steps 3000
@@ -38,8 +41,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO / "dataset_tools"))
 
-FS2_URL = "https://github.com/ming024/FastSpeech2"
-FS2_COMMIT = "d4e79eb"           # master as of this repo; the patches are written against it
 DATASET = "Pashto"
 LOSS_NAMES = ["total_loss", "mel_loss", "mel_postnet_loss", "pitch_loss", "energy_loss",
               "duration_loss"]
@@ -123,10 +124,9 @@ def merged_lexicon(args):
 def stage_setup(args):
     fs2 = args.fs2_dir
     if not (fs2 / "train.py").exists():
-        run(["git", "clone", "-q", FS2_URL, fs2])
-        run(["git", "-C", fs2, "checkout", "-q", FS2_COMMIT])
-    else:
-        print(f"{fs2} already exists, re-applying the setup on top of it")
+        sys.exit(f"{fs2} not found: FastSpeech2 is bundled in this repo, so check that the "
+                 "FastSpeech2/ folder was cloned along with it (or pass --fs2-dir).")
+    print(f"using the bundled {fs2}")
 
     tools("patch", "--repo", fs2)
     tools("modernize", "--repo", fs2)
@@ -476,6 +476,31 @@ def stage_synthesize(args):
 
 
 # ---------------------------------------------------------------------------
+# overfit-test
+# ---------------------------------------------------------------------------
+
+def stage_overfit_test(args):
+    """Regenerate the training clips with a checkpoint and compare them with the originals."""
+    require_setup(args)
+    pre = load_yaml(fs2_config(args, "preprocess"))
+    pre_dir = args.fs2_dir / pre["path"]["preprocessed_path"]
+    if not (pre_dir / "train.txt").exists() or not (pre_dir / "stats.json").exists():
+        sys.exit(f"no preprocessed data in {pre_dir} -- run corpus, align and preprocess first "
+                 "(with the same --clips as for training)")
+    ckpts = checkpoints(args)
+    step = args.step or (ckpts[-1] if ckpts else None)
+    if step is None or step not in ckpts:
+        sys.exit(f"no checkpoint {'for step %s ' % step if step else ''}found (have: {ckpts})")
+    out = run_dir(args) / "overfit_test" / f"step{step}"
+    cmd = [sys.executable, REPO / "fs2_overfit_test.py", "--restore_step", step, "--out", out,
+           "-p", f"config/{DATASET}/preprocess.yaml", "-m", f"config/{DATASET}/model.yaml",
+           "-t", f"config/{DATASET}/train.yaml"]
+    if args.clips:
+        cmd += ["--clips", *args.clips]
+    run(cmd, cwd=args.fs2_dir)
+
+
+# ---------------------------------------------------------------------------
 
 def stage_all(args):
     stage_setup(args)
@@ -489,7 +514,7 @@ def stage_all(args):
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--fs2-dir", type=Path, default=REPO / "FastSpeech2",
-                        help="FastSpeech2 checkout (created by setup)")
+                        help="FastSpeech2 folder (bundled in the repo)")
     common.add_argument("--data-dir", type=Path, default=REPO / "data")
     common.add_argument("--run-name", default="pashto",
                         help="experiment name; results go to runs/<run-name>/")
@@ -531,6 +556,10 @@ def main():
     synth_opts.add_argument("--duration-control", type=float, default=1.0,
                             help="speaking-rate factor (>1 = slower)")
 
+    overfit_opts = argparse.ArgumentParser(add_help=False)
+    overfit_opts.add_argument("--step", type=int, help="checkpoint to test (default: latest)")
+    overfit_opts.add_argument("--clips", nargs="+", help="only these clips (default: all training clips)")
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="stage", required=True)
     stages = {
@@ -542,6 +571,7 @@ def main():
         "train": (stage_train, [train_opts]),
         "metrics": (stage_metrics, []),
         "synthesize": (stage_synthesize, [synth_opts]),
+        "overfit-test": (stage_overfit_test, [overfit_opts]),
         "all": (stage_all, [corpus_opts, align_opts, pre_opts, train_opts, synth_opts]),
     }
     for name, (fn, parents) in stages.items():

@@ -8,12 +8,17 @@ that runs every step from alignment to synthesized audio, on Colab or locally.
 ## What's in the repo
 
 ```
-pipeline.py              all steps: setup -> corpus -> align -> preprocess -> train -> synthesize
-fs2_pashto_tools.py      patches FastSpeech2 for Pashto + current libraries (used by pipeline.py)
-colab_train.ipynb        Colab notebook that runs pipeline.py cell by cell
+pipeline.py              all steps: setup -> corpus -> align -> preprocess -> train -> synthesize / overfit-test
+FastSpeech2/             ming024/FastSpeech2 (commit d4e79eb), bundled and already patched for Pashto:
+                         train.py, synthesize.py, preprocess.py, model/, hifigan/ ... (see FastSpeech2/PASHTO_README.md)
+fs2_pashto_tools.py      the patches applied to FastSpeech2/ (setup re-applies them; no-op when already in)
+fs2_overfit_test.py      regenerates the training clips and compares them with the originals
+colab_train.ipynb        Colab notebook: install -> data -> train -> synthesize -> overfit test
+colab_generate.ipynb     Colab notebook: load a trained checkpoint from Google Drive and generate speech (no training)
 requirements.txt         Python packages for training / synthesis
 config/Pashto/           FastSpeech2 configs (preprocess / model / train)
 patches/pashto_cleaners.py   Pashto text cleaner appended to FastSpeech2's text/cleaners.py
+patches/fastspeech2_pashto.diff  every change made to upstream FastSpeech2, as a diff
 data/
   clips/                 759 mp3 clips (1_crop-001.mp3 ... 9_crop-035.mp3)
   metadata.csv           clip|Pashto transcript
@@ -26,9 +31,11 @@ data/
 dataset_tools/           how data/ was built (needs the NeMo Pashto G2P model; see below)
 ```
 
-Created when you run the pipeline (git-ignored): `FastSpeech2/` (the patched
-checkout, aligner corpus, features, checkpoints) and `bin/` (micromamba).
-Results go to `runs/<run-name>/`.
+Nothing else is cloned: FastSpeech2's code, including `FastSpeech2/synthesize.py` and
+`FastSpeech2/train.py`, is part of this repo. Created when you run the pipeline
+(git-ignored): inside `FastSpeech2/`, the aligner corpus (`raw_data/`), features
+(`preprocessed_data/Pashto/`), checkpoints and logs (`output/`), the unzipped vocoder
+and the copied configs/lexicon; and `bin/` (micromamba). Results go to `runs/<run-name>/`.
 
 ## Quick start on Colab (the 4-clip demo)
 
@@ -43,7 +50,7 @@ The notebook only calls `pipeline.py`. The same steps as commands:
 
 ```bash
 pip install -r requirements.txt
-python pipeline.py setup                       # clone + patch FastSpeech2, configs, lexicon, vocoder
+python pipeline.py setup                       # bundled FastSpeech2: vocoder, configs, lexicon
 python pipeline.py install-mfa                 # Montreal Forced Aligner (Linux/Colab)
 python pipeline.py corpus --clips "1_crop-00[1-4]"
 python pipeline.py align
@@ -67,14 +74,15 @@ garbled. Good quality needs the full dataset.
 
 | Stage | What it does |
 |---|---|
-| `setup` | Clones FastSpeech2 (pinned commit) and runs `fs2_pashto_tools.py patch`, `modernize` and `symbols`. Unzips the HiFi-GAN universal vocoder. Merges `pron_overrides.txt` into the lexicon. Copies `config/Pashto/`. Safe to re-run. |
+| `setup` | Prepares the bundled `FastSpeech2/`: re-applies `fs2_pashto_tools.py patch`, `modernize` and `symbols` (no-ops, since they are already applied). Unzips the HiFi-GAN universal vocoder. Merges `pron_overrides.txt` into the lexicon. Copies `config/Pashto/`. Safe to re-run. |
 | `install-mfa` | Linux/Colab: micromamba plus the conda-forge `montreal-forced-aligner` environment. |
 | `corpus --clips ...` | Writes 22.05 kHz wav and normalised `.lab` text for the selected clips. Clips are names or patterns; leave `--clips` out to use all 759. |
 | `align` | `mfa align` with `data/mfa/pashto_acoustic.zip`, or `--train-acoustic` to train a new aligner model on the corpus. Then labels silences `sp` and checks every phone. |
 | `preprocess` | Runs FastSpeech2's `preprocess.py`. Below 20 clips it holds out 1 clip for validation and also trains on it (`--val-size`, `--[no-]train-on-all`). |
 | `train` | Runs FastSpeech2's `train.py`. Flags override `train.yaml`: `--steps --batch-size --warmup --log-step --val-step --synth-step --save-step --restore-step`. Exports metrics when it ends. |
 | `metrics` | Re-exports metrics at any time, e.g. while a long run is in progress. |
-| `synthesize` | Turns `data/demo_sentences.txt`, `--sentences FILE` (`name|text` lines) or `--text "..."` into wav. Uses the latest checkpoint, or `--step N`. |
+| `synthesize` | Turns `data/demo_sentences.txt`, `--sentences FILE` (`name|text` lines) or `--text "..."` into wav, through `FastSpeech2/synthesize.py`. Uses the latest checkpoint, or `--step N`. |
+| `overfit-test` | Regenerates every training clip with a checkpoint and compares it with the original: audio side by side, spectrograms, metrics. `--step N`, `--clips ...`. See below. |
 
 `all` runs setup → corpus → align → preprocess → train → synthesize in one go.
 
@@ -100,6 +108,36 @@ real ones, and by listening to the samples.
 Live view: `tensorboard --logdir FastSpeech2/output/log/Pashto`. Checkpoints
 (about 350 MB each) are in `FastSpeech2/output/ckpt/Pashto/`.
 
+## Overfitting test: regenerate the training clips
+
+```bash
+python pipeline.py overfit-test --run-name demo4 --step 3000
+```
+
+Needs the checkpoint plus the preprocessed data of the clips it was trained on. On Colab
+with the checkpoints on Google Drive, use **`colab_generate.ipynb`**: it links the Drive folder,
+recomputes the clips' data (deterministic) and runs this stage. No training is involved. Output goes to `runs/<run-name>/overfit_test/step<N>/`, with five
+versions of every clip:
+
+| File | What it is | What it tells you |
+|---|---|---|
+| `<clip>_1_original.wav` | the recording | the target |
+| `<clip>_2_vocoder.wav` | real spectrogram → HiFi-GAN | the best this vocoder can do on this voice |
+| `<clip>_3_teacher_forced.wav` | model given the real durations, pitch and energy | how well the spectrogram decoder memorised the clip |
+| `<clip>_4_from_phones.wav` | model alone, from the training phone sequence (with pauses) | the real overfitting test |
+| `<clip>_5_from_text.wav` | model alone, from the Pashto transcript via the lexicon | the same through the text front end (no pause markers) |
+
+Each clip also gets `<clip>_mels.png`, its spectrograms one under the other.
+
+`metrics.csv` / `metrics.json` give, per version:
+- **`mel_l1_dtw`:** the mean absolute log-mel difference from the real spectrogram, after
+  dynamic time warping lines the frames up. It's on the same scale as the training mel
+  loss; lower is closer.
+- **`length_ratio`:** generated length ÷ real length.
+
+A well-overfitted model has versions 3 and 4 close to version 2, both by ear and by
+`mel_l1_dtw`, and `length_ratio` near 1.
+
 ## Training on the full dataset
 
 - **Aligner:** `data/mfa/pashto_acoustic.zip` was trained on the 4 demo clips only. For
@@ -118,8 +156,9 @@ Live view: `tensorboard --logdir FastSpeech2/output/log/Pashto`. Checkpoints
 
 ## Changes to FastSpeech2 and the configs
 
-`fs2_pashto_tools.py patch` (idempotent; aborts if the FastSpeech2 code doesn't
-match what it expects):
+The bundled `FastSpeech2/` already contains these changes. The full diff against upstream
+is `patches/fastspeech2_pashto.diff`. `fs2_pashto_tools.py patch` applies them to a fresh
+upstream checkout; it is idempotent and aborts if the code doesn't match what it expects:
 
 - **`text/cleaners.py`:** adds `pashto_cleaners`, the same word normalisation the
   lexicon and aligner used.

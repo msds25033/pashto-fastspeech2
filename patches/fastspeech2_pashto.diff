@@ -1,0 +1,327 @@
+diff --git a/audio/audio_processing.py b/audio/audio_processing.py
+index 07bef28..8a5f82b 100644
+--- a/audio/audio_processing.py
++++ b/audio/audio_processing.py
+@@ -54,7 +54,7 @@ def window_sumsquare(
+     # Compute the squared window at the desired length
+     win_sq = get_window(window, win_length, fftbins=True)
+     win_sq = librosa_util.normalize(win_sq, norm=norm) ** 2
+-    win_sq = librosa_util.pad_center(win_sq, n_fft)
++    win_sq = librosa_util.pad_center(win_sq, size=n_fft)
+ 
+     # Fill the envelope
+     for i in range(n_frames):
+diff --git a/audio/stft.py b/audio/stft.py
+index fcce29b..abdb663 100644
+--- a/audio/stft.py
++++ b/audio/stft.py
+@@ -5,6 +5,8 @@ from scipy.signal import get_window
+ from librosa.util import pad_center, tiny
+ from librosa.filters import mel as librosa_mel_fn
+ 
++_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Pashto patch: CPU fallback
++
+ from audio.audio_processing import (
+     dynamic_range_compression,
+     dynamic_range_decompression,
+@@ -39,7 +41,7 @@ class STFT(torch.nn.Module):
+             assert filter_length >= win_length
+             # get window and zero center pad it to filter_length
+             fft_window = get_window(window, win_length, fftbins=True)
+-            fft_window = pad_center(fft_window, filter_length)
++            fft_window = pad_center(fft_window, size=filter_length)
+             fft_window = torch.from_numpy(fft_window).float()
+ 
+             # window the bases
+@@ -65,8 +67,8 @@ class STFT(torch.nn.Module):
+         input_data = input_data.squeeze(1)
+ 
+         forward_transform = F.conv1d(
+-            input_data.cuda(),
+-            torch.autograd.Variable(self.forward_basis, requires_grad=False).cuda(),
++            input_data.to(_DEVICE),
++            torch.autograd.Variable(self.forward_basis, requires_grad=False).to(_DEVICE),
+             stride=self.hop_length,
+             padding=0,
+         ).cpu()
+@@ -142,9 +144,7 @@ class TacotronSTFT(torch.nn.Module):
+         self.n_mel_channels = n_mel_channels
+         self.sampling_rate = sampling_rate
+         self.stft_fn = STFT(filter_length, hop_length, win_length)
+-        mel_basis = librosa_mel_fn(
+-            sampling_rate, filter_length, n_mel_channels, mel_fmin, mel_fmax
+-        )
++        mel_basis = librosa_mel_fn(sr=sampling_rate, n_fft=filter_length, n_mels=n_mel_channels, fmin=mel_fmin, fmax=mel_fmax)
+         mel_basis = torch.from_numpy(mel_basis).float()
+         self.register_buffer("mel_basis", mel_basis)
+ 
+diff --git a/preprocessor/aishell3.py b/preprocessor/aishell3.py
+index 27b92aa..5208527 100644
+--- a/preprocessor/aishell3.py
++++ b/preprocessor/aishell3.py
+@@ -21,7 +21,7 @@ def prepare_align(config):
+                 wav_path = os.path.join(in_dir, dataset, "wav", speaker, wav_name)
+                 if os.path.exists(wav_path):
+                     os.makedirs(os.path.join(out_dir, speaker), exist_ok=True)
+-                    wav, _ = librosa.load(wav_path, sampling_rate)
++                    wav, _ = librosa.load(wav_path, sr=sampling_rate)
+                     wav = wav / max(abs(wav)) * max_wav_value
+                     wavfile.write(
+                         os.path.join(out_dir, speaker, wav_name),
+diff --git a/preprocessor/libritts.py b/preprocessor/libritts.py
+index a90fcde..15155cf 100644
+--- a/preprocessor/libritts.py
++++ b/preprocessor/libritts.py
+@@ -31,7 +31,7 @@ def prepare_align(config):
+                 text = _clean_text(text, cleaners)
+ 
+                 os.makedirs(os.path.join(out_dir, speaker), exist_ok=True)
+-                wav, _ = librosa.load(wav_path, sampling_rate)
++                wav, _ = librosa.load(wav_path, sr=sampling_rate)
+                 wav = wav / max(abs(wav)) * max_wav_value
+                 wavfile.write(
+                     os.path.join(out_dir, speaker, "{}.wav".format(base_name)),
+diff --git a/preprocessor/ljspeech.py b/preprocessor/ljspeech.py
+index a2f6648..54409f9 100644
+--- a/preprocessor/ljspeech.py
++++ b/preprocessor/ljspeech.py
+@@ -25,7 +25,7 @@ def prepare_align(config):
+             wav_path = os.path.join(in_dir, "wavs", "{}.wav".format(base_name))
+             if os.path.exists(wav_path):
+                 os.makedirs(os.path.join(out_dir, speaker), exist_ok=True)
+-                wav, _ = librosa.load(wav_path, sampling_rate)
++                wav, _ = librosa.load(wav_path, sr=sampling_rate)
+                 wav = wav / max(abs(wav)) * max_wav_value
+                 wavfile.write(
+                     os.path.join(out_dir, speaker, "{}.wav".format(base_name)),
+diff --git a/synthesize.py b/synthesize.py
+index 59a682a..fc49f3a 100644
+--- a/synthesize.py
++++ b/synthesize.py
+@@ -19,7 +19,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+ 
+ def read_lexicon(lex_path):
+     lexicon = {}
+-    with open(lex_path) as f:
++    with open(lex_path, encoding="utf-8") as f:
+         for line in f:
+             temp = re.split(r"\s+", line.strip("\n"))
+             word = temp[0]
+@@ -84,6 +84,32 @@ def preprocess_mandarin(text, preprocess_config):
+     return np.array(sequence)
+ 
+ 
++def preprocess_pashto(text, preprocess_config):
++    """Pashto text -> phone IDs, through the same word normalisation and lexicon
++    the training data was aligned with. Words missing from the lexicon are skipped."""
++    from text.cleaners import pashto_words
++
++    lexicon = read_lexicon(preprocess_config["path"]["lexicon_path"])
++    phones, unknown = [], []
++    for w in pashto_words(text):
++        if w.lower() in lexicon:
++            phones += lexicon[w.lower()]
++        else:
++            unknown.append(w)
++    if unknown:
++        print("WARNING: words not in the lexicon were skipped: {}".format(unknown))
++    phones = "{" + " ".join(phones) + "}"
++
++    print("Raw Text Sequence: {}".format(text))
++    print("Phoneme Sequence: {}".format(phones))
++    sequence = np.array(
++        text_to_sequence(
++            phones, preprocess_config["preprocessing"]["text"]["text_cleaners"]
++        )
++    )
++    return np.array(sequence)
++
++
+ def synthesize(model, step, configs, vocoder, batchs, control_values):
+     preprocess_config, model_config, train_config = configs
+     pitch_control, energy_control, duration_control = control_values
+@@ -131,6 +157,12 @@ if __name__ == "__main__":
+         default=None,
+         help="raw text to synthesize, for single-sentence mode only",
+     )
++    parser.add_argument(
++        "--name",
++        type=str,
++        default=None,
++        help="output file name (without .wav) for single mode; default: the text",
++    )
+     parser.add_argument(
+         "--speaker_id",
+         type=int,
+@@ -200,12 +232,15 @@ if __name__ == "__main__":
+             collate_fn=dataset.collate_fn,
+         )
+     if args.mode == "single":
+-        ids = raw_texts = [args.text[:100]]
++        raw_texts = [args.text[:100]]
++        ids = [args.name] if args.name else raw_texts
+         speakers = np.array([args.speaker_id])
+         if preprocess_config["preprocessing"]["text"]["language"] == "en":
+             texts = np.array([preprocess_english(args.text, preprocess_config)])
+         elif preprocess_config["preprocessing"]["text"]["language"] == "zh":
+             texts = np.array([preprocess_mandarin(args.text, preprocess_config)])
++        elif preprocess_config["preprocessing"]["text"]["language"] == "ps":
++            texts = np.array([preprocess_pashto(args.text, preprocess_config)])
+         text_lens = np.array([len(texts[0])])
+         batchs = [(ids, raw_texts, speakers, texts, text_lens, max(text_lens))]
+ 
+diff --git a/text/cleaners.py b/text/cleaners.py
+index 7bd4d8d..5a2d8be 100644
+--- a/text/cleaners.py
++++ b/text/cleaners.py
+@@ -87,3 +87,46 @@ def english_cleaners(text):
+     text = expand_abbreviations(text)
+     text = collapse_whitespace(text)
+     return text
++
++
++
++# ---------------------------------------------------------------------------
++# Pashto. Append-only addition: nothing above is changed.
++# Must behave exactly like normalize_words() in make_lexicon.py, because the
++# lexicon keys and the aligner's .lab files were built with that function.
++# ---------------------------------------------------------------------------
++import unicodedata
++
++# Written abbreviations that are *spoken* as words.
++_PASHTO_SPOKEN_FORMS = {"\ufdfa": "صلی الله علیه وسلم"}  # ﷺ
++
++
++def _pashto_is_annotation_mark(ch):
++    o = ord(ch)  # Quranic recitation marks: not pronunciation
++    return 0x0610 <= o <= 0x061A or 0x06D6 <= o <= 0x06ED
++
++
++def pashto_words(text):
++    """Pashto text -> list of words, punctuation removed (see make_lexicon.py)."""
++    for written, spoken in _PASHTO_SPOKEN_FORMS.items():
++        text = text.replace(written, f" {spoken} ")
++    out = []
++    for token in unicodedata.normalize("NFC", text).split():
++        chars = []
++        for ch in token:
++            cat = unicodedata.category(ch)
++            if cat[0] in "PS":                               # punctuation / symbols
++                chars.append(" ")
++            elif cat in ("Cf", "Cc") or ch == "\u0640":      # zero-width, bidi, tatweel
++                continue
++            elif cat == "Mn" and _pashto_is_annotation_mark(ch):
++                continue
++            else:
++                chars.append(ch)
++        out.extend("".join(chars).split())
++    return out
++
++
++def pashto_cleaners(text):
++    '''Pipeline for Pashto script: keeps the Pashto letters, removes punctuation.'''
++    return " ".join(pashto_words(text))
+diff --git a/text/symbols.py b/text/symbols.py
+index ae99253..65dbf11 100644
+--- a/text/symbols.py
++++ b/text/symbols.py
+@@ -1,29 +1,13 @@
+-""" from https://github.com/keithito/tacotron """
+-
+-"""
+-Defines the set of symbols used in text input to the model.
+-
+-The default is a set of ASCII characters that works well for English or text that has been run through Unidecode. For other data, you can modify _characters. See TRAINING_DATA.md for details. """
+-
+-from text import cmudict, pinyin
++""" Pashto phone set, written by fs2_pashto_tools.py from the lexicon's phone list.
++The original English file is saved next to this one as symbols.py.orig. """
+ 
+ _pad = "_"
+-_punctuation = "!'(),.:;? "
+ _special = "-"
+-_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
++_punctuation = "!'(),.:;? "
+ _silences = ["@sp", "@spn", "@sil"]
+ 
+-# Prepend "@" to ARPAbet symbols to ensure uniqueness (some are the same as uppercase letters):
+-_arpabet = ["@" + s for s in cmudict.valid_symbols]
+-_pinyin = ["@" + s for s in pinyin.valid_symbols]
++# "@" prefix = phone symbol (same convention as the ARPAbet symbols this replaces)
++_pashto = ["@" + s for s in ["a", "ɑ", "e", "i", "d", "n", "r", "l", "o", "m", "k", "h", "w", "t", "ə", "u", "b", "s", "p", "j", "t͡ʃ", "x", "ɡ", "z", "ʃ", "q", "ɽ", "f", "ɣ", "t͡s", "d͡z", "d͡ʒ", "ʈ", "ɖ", "ŋ", "ʒ", "ɳ"]]
+ 
+ # Export all symbols:
+-symbols = (
+-    [_pad]
+-    + list(_special)
+-    + list(_punctuation)
+-    + list(_letters)
+-    + _arpabet
+-    + _pinyin
+-    + _silences
+-)
++symbols = [_pad] + list(_special) + list(_punctuation) + _pashto + _silences
+diff --git a/train.py b/train.py
+index d1891d3..b4159d4 100644
+--- a/train.py
++++ b/train.py
+@@ -29,7 +29,10 @@ def main(args, configs):
+     )
+     batch_size = train_config["optimizer"]["batch_size"]
+     group_size = 4  # Set this larger than 1 to enable sorting in Dataset
+-    assert batch_size * group_size < len(dataset)
++    # Pashto patch: tiny datasets (a handful of clips) can't fill 4 groups of batches
++    group_size = max(1, min(group_size, len(dataset) // batch_size))
++    assert batch_size * group_size <= len(dataset), (
++        f"batch_size {batch_size} is larger than the {len(dataset)} training utterances")
+     loader = DataLoader(
+         dataset,
+         batch_size=batch_size * group_size,
+@@ -109,6 +112,9 @@ def main(args, configs):
+                     outer_bar.write(message1 + message2)
+ 
+                     log(train_logger, step, losses=losses)
++                    train_logger.add_scalar(
++                        "Optim/learning_rate", optimizer._optimizer.param_groups[0]["lr"], step
++                    )
+ 
+                 if step % synth_step == 0:
+                     fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
+diff --git a/utils/model.py b/utils/model.py
+index 45e1f41..b8659b2 100644
+--- a/utils/model.py
++++ b/utils/model.py
+@@ -17,7 +17,7 @@ def get_model(args, configs, device, train=False):
+             train_config["path"]["ckpt_path"],
+             "{}.pth.tar".format(args.restore_step),
+         )
+-        ckpt = torch.load(ckpt_path)
++        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+         model.load_state_dict(ckpt["model"])
+ 
+     if train:
+@@ -60,9 +60,9 @@ def get_vocoder(config, device):
+         config = hifigan.AttrDict(config)
+         vocoder = hifigan.Generator(config)
+         if speaker == "LJSpeech":
+-            ckpt = torch.load("hifigan/generator_LJSpeech.pth.tar")
++            ckpt = torch.load("hifigan/generator_LJSpeech.pth.tar", map_location=device)
+         elif speaker == "universal":
+-            ckpt = torch.load("hifigan/generator_universal.pth.tar")
++            ckpt = torch.load("hifigan/generator_universal.pth.tar", map_location=device)
+         vocoder.load_state_dict(ckpt["generator"])
+         vocoder.eval()
+         vocoder.remove_weight_norm()
+diff --git a/utils/tools.py b/utils/tools.py
+index f897430..3075693 100644
+--- a/utils/tools.py
++++ b/utils/tools.py
+@@ -38,7 +38,7 @@ def to_device(data, device):
+         mels = torch.from_numpy(mels).float().to(device)
+         mel_lens = torch.from_numpy(mel_lens).to(device)
+         pitches = torch.from_numpy(pitches).float().to(device)
+-        energies = torch.from_numpy(energies).to(device)
++        energies = torch.from_numpy(energies).float().to(device)
+         durations = torch.from_numpy(durations).long().to(device)
+ 
+         return (

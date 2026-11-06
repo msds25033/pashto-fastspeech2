@@ -1,8 +1,20 @@
-# created by pipeline.py
-FastSpeech2/
+# Generated inside the bundled FastSpeech2/ by pipeline.py (not source):
+# aligner corpus (corpus stage)
+FastSpeech2/raw_data/
+# TextGrids + features (align / preprocess stages)
+FastSpeech2/preprocessed_data/Pashto/
+# checkpoints, TensorBoard logs, results (train stage)
+FastSpeech2/output/
+# vocoder, unzipped from the .zip by setup
+FastSpeech2/hifigan/*.pth.tar
+# copied from config/Pashto by setup -- edit the one at the repo root
+FastSpeech2/config/Pashto/
+# data/lexicon + pron_overrides, written by setup
+FastSpeech2/lexicon/pashto-lexicon.txt
+
+# Other generated files
 bin/
 runs/*/audio/*.png
 __pycache__/
 *.pyc
-# dataset_tools working files
 _g2p_tmp*/
