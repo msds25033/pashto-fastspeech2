@@ -8,13 +8,17 @@ For every utterance in train.txt / val.txt it writes, into --out:
     <clip>_1_original.wav         the recording (aligner corpus copy, 22.05 kHz)
     <clip>_2_vocoder.wav          real mel-spectrogram -> HiFi-GAN: the best this vocoder can do
     <clip>_3_teacher_forced.wav   model given the real durations / pitch / energy
-    <clip>_4_from_phones.wav      model alone, from the training phone sequence (with pauses)
-    <clip>_5_from_text.wav        model alone, from the Pashto transcript via the lexicon
+    <clip>_4_real_durations.wav   model given only the real durations (pitch / energy predicted)
+    <clip>_5_from_phones.wav      model alone, from the training phone sequence (with pauses)
+    <clip>_6_from_text.wav        model alone, from the Pashto transcript (pauses at punctuation)
     <clip>_mels.png               the spectrograms above, one under the other
 plus metrics.csv / metrics.json:
     mel_l1_dtw     mean |log-mel difference| to the real spectrogram, after DTW lines up the
                    frames (same scale as the training mel loss; lower = closer to the original)
     length_ratio   generated length / real length (1.0 = same speaking rate)
+Reading the versions: 3 vs 2 = how well the decoder memorised the spectrograms; 4 vs 3 = the
+cost of predicted pitch/energy; 5 vs 4 = the cost of predicted durations; 6 vs 5 = the text
+front end (lexicon pronunciations, pauses only at punctuation).
 """
 
 import argparse
@@ -47,22 +51,22 @@ def read_list(path):
     return rows
 
 
-def run_model(model, speaker_id, ids, targets=None):
-    """-> predicted mel (frames x 80) as numpy"""
+def run_model(model, speaker_id, ids, duration=None, pitch=None, energy=None):
+    """-> predicted mel (frames x 80) as numpy. Targets that are given replace the model's
+    own predictions (teacher forcing); the others are predicted."""
     spk = torch.tensor([speaker_id], dtype=torch.long, device=DEVICE)
     txt = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     lens = torch.tensor([len(ids)], device=DEVICE)
+    tensor = lambda a: torch.from_numpy(a).float().unsqueeze(0).to(DEVICE)  # noqa: E731
     kwargs = {}
-    if targets is not None:
-        mel, pitch, energy, duration = targets
-        kwargs = dict(
-            mels=torch.from_numpy(mel).float().unsqueeze(0).to(DEVICE),
-            mel_lens=torch.tensor([mel.shape[0]], device=DEVICE),
-            max_mel_len=mel.shape[0],
-            p_targets=torch.from_numpy(pitch).float().unsqueeze(0).to(DEVICE),
-            e_targets=torch.from_numpy(energy).float().unsqueeze(0).to(DEVICE),
-            d_targets=torch.from_numpy(duration).long().unsqueeze(0).to(DEVICE),
-        )
+    if duration is not None:
+        n_frames = int(duration.sum())
+        kwargs.update(mel_lens=torch.tensor([n_frames], device=DEVICE), max_mel_len=n_frames,
+                      d_targets=torch.from_numpy(duration).long().unsqueeze(0).to(DEVICE))
+    if pitch is not None:
+        kwargs["p_targets"] = tensor(pitch)
+    if energy is not None:
+        kwargs["e_targets"] = tensor(energy)
     with torch.no_grad():
         out = model(spk, txt, lens, len(ids), **kwargs)
     n = int(out[9][0])
@@ -106,6 +110,8 @@ def main():
     ap.add_argument("--restore_step", type=int, required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--clips", nargs="*", help="only these clip names (default: all)")
+    ap.add_argument("--metadata", help="metadata.csv: original transcripts with punctuation for the "
+                                       "text version (default: the .lab text, which has none)")
     args = ap.parse_args()
 
     pre = yaml.safe_load(open(args.preprocess_config, encoding="utf-8"))
@@ -128,6 +134,12 @@ def main():
         for r in read_list(pre_dir / f"{name}.txt"):
             rows[r[0]] = r
             split[r[0]] = "+".join(filter(None, [split.get(r[0]), name]))
+    transcripts = {}
+    if args.metadata:
+        for line in Path(args.metadata).read_text(encoding="utf-8").splitlines():
+            if "|" in line:
+                name, text = line.split("|", 1)
+                transcripts[Path(name).stem] = text
     if args.clips:
         rows = {k: v for k, v in rows.items() if k in args.clips or Path(k).stem in args.clips}
     if not rows:
@@ -141,11 +153,13 @@ def main():
         sid = speakers[speaker]
         ids = text_to_sequence(phones, cleaners)
 
+        text = transcripts.get(basename, raw_text)
         variants = {
             "2_vocoder": real_mel,
-            "3_teacher_forced": run_model(model, sid, ids, (real_mel, pitch, energy, duration)),
-            "4_from_phones": run_model(model, sid, ids),
-            "5_from_text": run_model(model, sid, list(preprocess_pashto(raw_text, pre))),
+            "3_teacher_forced": run_model(model, sid, ids, duration, pitch, energy),
+            "4_real_durations": run_model(model, sid, ids, duration),
+            "5_from_phones": run_model(model, sid, ids),
+            "6_from_text": run_model(model, sid, list(preprocess_pashto(text, pre))),
         }
         src = Path(pre["path"]["raw_path"]) / speaker / f"{basename}.wav"
         if src.exists():
@@ -161,7 +175,8 @@ def main():
                   f"mel L1 (DTW) {row['mel_l1_dtw']:.3f}")
         plot(list(variants.values()),
              [f"{basename}: real mel (what 2_vocoder plays)", "3 teacher-forced (real durations/pitch/energy)",
-              "4 from training phones (model alone)", "5 from Pashto text via lexicon (model alone)"],
+              "4 real durations, predicted pitch/energy", "5 from training phones (model alone)",
+              "6 from Pashto text via lexicon (model alone)"],
              out / f"{basename}_mels.png")
 
     with open(out / "metrics.csv", "w", encoding="utf-8", newline="") as f:

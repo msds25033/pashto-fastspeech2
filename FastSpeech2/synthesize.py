@@ -86,16 +86,23 @@ def preprocess_mandarin(text, preprocess_config):
 
 def preprocess_pashto(text, preprocess_config):
     """Pashto text -> phone IDs, through the same word normalisation and lexicon
-    the training data was aligned with. Words missing from the lexicon are skipped."""
+    the training data was aligned with, with a pause at punctuation. Words missing
+    from the lexicon are skipped."""
     from text.cleaners import pashto_words
 
     lexicon = read_lexicon(preprocess_config["path"]["lexicon_path"])
     phones, unknown = [], []
-    for w in pashto_words(text):
-        if w.lower() in lexicon:
-            phones += lexicon[w.lower()]
-        else:
-            unknown.append(w)
+    # A pause ("sp", the aligner's silence label) at sentence/clause punctuation, which is
+    # where the speaker pauses most of the time; the training data has sp at real pauses.
+    for chunk in re.split(r"[۔؟،؛!?.,;:]+", text):
+        words = pashto_words(chunk)
+        if words and phones and phones[-1] != "sp":
+            phones.append("sp")
+        for w in words:
+            if w.lower() in lexicon:
+                phones += lexicon[w.lower()]
+            else:
+                unknown.append(w)
     if unknown:
         print("WARNING: words not in the lexicon were skipped: {}".format(unknown))
     phones = "{" + " ".join(phones) + "}"

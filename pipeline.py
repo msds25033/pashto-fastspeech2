@@ -291,9 +291,38 @@ def stage_train(args):
     train_txt = args.fs2_dir / pre["path"]["preprocessed_path"] / "train.txt"
     if not train_txt.exists():
         sys.exit("no train.txt -- run the preprocess stage first")
-    n_train = len([ln for ln in train_txt.read_text(encoding="utf-8").splitlines() if ln.strip()])
+    train_clips = sorted(ln.split("|")[0] for ln in train_txt.read_text(encoding="utf-8").splitlines()
+                         if ln.strip())
+    n_train = len(train_clips)
+    rd = run_dir(args)
 
-    cfg = load_yaml(fs2_config(args, "train"))
+    if args.resume:
+        ckpts = checkpoints(args)
+        if not ckpts:
+            sys.exit("--resume: no checkpoint found in FastSpeech2/output/ckpt/Pashto "
+                     "(on Colab: link the Drive output folder first, notebook step 3)")
+        args.restore_step = ckpts[-1]
+        print(f"resuming from the latest checkpoint: step {args.restore_step}")
+
+    # Continuing a run must use exactly the clips it was trained on.
+    clips_file = rd / "train_clips.txt"
+    if args.restore_step and clips_file.exists():
+        before = clips_file.read_text(encoding="utf-8").split()
+        if before != train_clips:
+            sys.exit(f"run '{args.run_name}' was trained on {before}, but train.txt now has "
+                     f"{train_clips}. Re-run corpus/align/preprocess with the same --clips.")
+        print(f"same {n_train} training clips as before: {train_clips}")
+    else:
+        if args.restore_step:
+            print(f"note: no record of this run's clips; recording the current ones {train_clips}")
+        clips_file.write_text("\n".join(train_clips) + "\n", encoding="utf-8")
+
+    # When resuming, start from the run's own saved settings (warm-up, batch size, ...) so the
+    # learning-rate schedule continues where it left off; the flags below still override them.
+    saved = rd / "config" / "train.yaml"
+    cfg = load_yaml(saved if args.restore_step and saved.exists() else fs2_config(args, "train"))
+    if args.restore_step and args.steps is None:
+        cfg["step"]["total_step"] = max(cfg["step"]["total_step"], args.restore_step + 10000)
     overrides = {
         ("optimizer", "batch_size"): args.batch_size,
         ("optimizer", "warm_up_step"): args.warmup,
@@ -310,10 +339,24 @@ def stage_train(args):
         print(f"batch_size {cfg['optimizer']['batch_size']} > {n_train} training utterances; "
               f"using {n_train}")
         cfg["optimizer"]["batch_size"] = n_train
+    if args.restore_step and cfg["step"]["total_step"] <= args.restore_step:
+        sys.exit(f"--steps {cfg['step']['total_step']} must be larger than the checkpoint "
+                 f"step {args.restore_step} (it is the total, not the number of extra steps)")
     save_yaml(fs2_config(args, "train"), cfg)
     print("training config: " + json.dumps({**cfg["optimizer"], **cfg["step"]}))
 
-    rd = run_dir(args)
+    # Dropout: from config/Pashto/model.yaml, or switched off with --overfit so the model can
+    # memorise the training clips. Dropout has no weights, so a checkpoint resumes either way.
+    mcfg = load_yaml(REPO / "config" / DATASET / "model.yaml")
+    if args.overfit:
+        mcfg["transformer"]["encoder_dropout"] = 0.0
+        mcfg["transformer"]["decoder_dropout"] = 0.0
+        mcfg["variance_predictor"]["dropout"] = 0.0
+    save_yaml(fs2_config(args, "model"), mcfg)
+    print("dropout: encoder {encoder_dropout}, decoder {decoder_dropout}, ".format(**mcfg["transformer"])
+          + f"variance predictors {mcfg['variance_predictor']['dropout']}"
+          + ("  (--overfit)" if args.overfit else ""))
+
     (rd / "config").mkdir(exist_ok=True)
     for name in ("preprocess", "model", "train"):
         shutil.copy(fs2_config(args, name), rd / "config" / f"{name}.yaml")
@@ -493,6 +536,7 @@ def stage_overfit_test(args):
         sys.exit(f"no checkpoint {'for step %s ' % step if step else ''}found (have: {ckpts})")
     out = run_dir(args) / "overfit_test" / f"step{step}"
     cmd = [sys.executable, REPO / "fs2_overfit_test.py", "--restore_step", step, "--out", out,
+           "--metadata", args.data_dir / "metadata.csv",
            "-p", f"config/{DATASET}/preprocess.yaml", "-m", f"config/{DATASET}/model.yaml",
            "-t", f"config/{DATASET}/train.yaml"]
     if args.clips:
@@ -547,6 +591,12 @@ def main():
     train_opts.add_argument("--synth-step", type=int, help="log a sample spectrogram + audio every N steps")
     train_opts.add_argument("--save-step", type=int, help="save a checkpoint every N steps")
     train_opts.add_argument("--restore-step", type=int, help="continue from this checkpoint")
+    train_opts.add_argument("--resume", action="store_true",
+                            help="continue from the latest checkpoint (with the run's saved settings; "
+                                 "--steps is the new total, default: +10000)")
+    train_opts.add_argument("--overfit", action="store_true",
+                            help="switch off dropout (encoder, decoder, variance predictors) so the "
+                                 "model memorises its training clips")
 
     synth_opts = argparse.ArgumentParser(add_help=False)
     synth_opts.add_argument("--step", type=int, help="checkpoint to use (default: latest)")

@@ -79,7 +79,7 @@ garbled. Good quality needs the full dataset.
 | `corpus --clips ...` | Writes 22.05 kHz wav and normalised `.lab` text for the selected clips. Clips are names or patterns; leave `--clips` out to use all 759. |
 | `align` | `mfa align` with `data/mfa/pashto_acoustic.zip`, or `--train-acoustic` to train a new aligner model on the corpus. Then labels silences `sp` and checks every phone. |
 | `preprocess` | Runs FastSpeech2's `preprocess.py`. Below 20 clips it holds out 1 clip for validation and also trains on it (`--val-size`, `--[no-]train-on-all`). |
-| `train` | Runs FastSpeech2's `train.py`. Flags override `train.yaml`: `--steps --batch-size --warmup --log-step --val-step --synth-step --save-step --restore-step`. Exports metrics when it ends. |
+| `train` | Runs FastSpeech2's `train.py`. Flags override `train.yaml`: `--steps --batch-size --warmup --log-step --val-step --synth-step --save-step --restore-step`; `--resume` continues from the latest checkpoint with the run's saved settings and only on the same clips; `--overfit` switches dropout off. Exports metrics when it ends. |
 | `metrics` | Re-exports metrics at any time, e.g. while a long run is in progress. |
 | `synthesize` | Turns `data/demo_sentences.txt`, `--sentences FILE` (`name|text` lines) or `--text "..."` into wav, through `FastSpeech2/synthesize.py`. Uses the latest checkpoint, or `--step N`. |
 | `overfit-test` | Regenerates every training clip with a checkpoint and compares it with the original: audio side by side, spectrograms, metrics. `--step N`, `--clips ...`. See below. |
@@ -116,7 +116,7 @@ python pipeline.py overfit-test --run-name demo4 --step 3000
 
 Needs the checkpoint plus the preprocessed data of the clips it was trained on. On Colab
 with the checkpoints on Google Drive, use **`colab_generate.ipynb`**: it links the Drive folder,
-recomputes the clips' data (deterministic) and runs this stage. No training is involved. Output goes to `runs/<run-name>/overfit_test/step<N>/`, with five
+recomputes the clips' data (deterministic) and runs this stage. No training is involved. Output goes to `runs/<run-name>/overfit_test/step<N>/`, with six
 versions of every clip:
 
 | File | What it is | What it tells you |
@@ -124,8 +124,9 @@ versions of every clip:
 | `<clip>_1_original.wav` | the recording | the target |
 | `<clip>_2_vocoder.wav` | real spectrogram → HiFi-GAN | the best this vocoder can do on this voice |
 | `<clip>_3_teacher_forced.wav` | model given the real durations, pitch and energy | how well the spectrogram decoder memorised the clip |
-| `<clip>_4_from_phones.wav` | model alone, from the training phone sequence (with pauses) | the real overfitting test |
-| `<clip>_5_from_text.wav` | model alone, from the Pashto transcript via the lexicon | the same through the text front end (no pause markers) |
+| `<clip>_4_real_durations.wav` | model given only the real durations (pitch/energy predicted) | 4 vs 3 = the pitch/energy predictors |
+| `<clip>_5_from_phones.wav` | model alone, from the training phone sequence (with pauses) | the real overfitting test; 5 vs 4 = the duration predictor |
+| `<clip>_6_from_text.wav` | model alone, from the Pashto transcript via the lexicon, with pauses at punctuation | 6 vs 5 = the text front end |
 
 Each clip also gets `<clip>_mels.png`, its spectrograms one under the other.
 
@@ -135,8 +136,24 @@ Each clip also gets `<clip>_mels.png`, its spectrograms one under the other.
   loss; lower is closer.
 - **`length_ratio`:** generated length ÷ real length.
 
-A well-overfitted model has versions 3 and 4 close to version 2, both by ear and by
+A well-overfitted model has versions 3–5 close to version 2, both by ear and by
 `mel_l1_dtw`, and `length_ratio` near 1.
+
+**Making it overfit.** Continue the same run with dropout off, until the predictors
+memorise the clips too:
+
+```bash
+python pipeline.py train --run-name demo4 --resume --overfit --steps 10000 \
+    --save-step 1000 --val-step 250 --synth-step 1000
+python pipeline.py overfit-test --run-name demo4          # latest checkpoint; compare with step 3000
+```
+
+- **`--resume`** continues from the newest checkpoint, using the run's saved settings
+  (warm-up, batch size), so the learning-rate schedule carries on. It refuses to start if
+  `train.txt` holds different clips from the ones recorded in `runs/<run>/train_clips.txt`.
+- **`--overfit`** sets the encoder, decoder and duration/pitch/energy-predictor dropout to 0.
+  The default config uses 0.2 / 0.2 / 0.5, which works against memorisation; dropout has no
+  weights, so the checkpoint loads either way.
 
 ## Training on the full dataset
 
@@ -168,7 +185,9 @@ upstream checkout; it is idempotent and aborts if the code doesn't match what it
   librosa ≥ 0.10 / 1.0, including `pad_center`, the call that crashed `preprocess.py`.
 - **`train.py`:** runs on a handful of clips (the original requires
   `batch_size × 4 < clips`) and logs the learning rate.
-- **`synthesize.py`:** adds a Pashto (`language: "ps"`) text front end and `--name`.
+- **`synthesize.py`:** adds a Pashto (`language: "ps"`) text front end and `--name`. The front
+  end inserts a pause (`sp`, the aligner's silence label) at punctuation; without it, text
+  input has no pauses at all, while this speaker pauses a lot.
 - **`utils/tools.py`:** energy targets are cast to float32 like pitch. Without this,
   normalised energy is float64 under NumPy 2, and training on a GPU fails with
   `Found dtype Double but expected Float`.
