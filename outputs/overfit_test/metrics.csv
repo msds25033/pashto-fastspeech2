@@ -1,0 +1,5 @@
+clip,split,version,frames,seconds,length_ratio,mel_l1_dtw
+1_crop-001,train,5_from_phones,2470,28.68,0.999,0.2067
+1_crop-002,train,5_from_phones,2260,26.24,1.0,0.2838
+1_crop-003,train,5_from_phones,2365,27.46,0.999,0.3533
+1_crop-004,train+val,5_from_phones,2481,28.8,1.0,0.2386

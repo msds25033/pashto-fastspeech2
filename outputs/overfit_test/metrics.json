@@ -1,0 +1,10 @@
+{
+  "checkpoint_step": 10000,
+  "clips": 4,
+  "mean_by_version": {
+    "5_from_phones": {
+      "mel_l1_dtw": 0.2706,
+      "length_ratio": 1.0
+    }
+  }
+}
