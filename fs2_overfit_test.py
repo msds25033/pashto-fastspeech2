@@ -110,6 +110,9 @@ def main():
     ap.add_argument("--restore_step", type=int, required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--clips", nargs="*", help="only these clip names (default: all)")
+    ap.add_argument("--phones-only", action="store_true",
+                    help="only the original and the model's output from the training phone sequence (5_from_phones), "
+                         "plus <clip>_phones.txt with that sequence")
     ap.add_argument("--metadata", help="metadata.csv: original transcripts with punctuation for the "
                                        "text version (default: the .lab text, which has none)")
     args = ap.parse_args()
@@ -153,14 +156,19 @@ def main():
         sid = speakers[speaker]
         ids = text_to_sequence(phones, cleaners)
 
+        (out / f"{basename}_phones.txt").write_text(phones + "\n", encoding="utf-8")
+        print(f"  phones: {phones}")
         text = transcripts.get(basename, raw_text)
-        variants = {
-            "2_vocoder": real_mel,
-            "3_teacher_forced": run_model(model, sid, ids, duration, pitch, energy),
-            "4_real_durations": run_model(model, sid, ids, duration),
-            "5_from_phones": run_model(model, sid, ids),
-            "6_from_text": run_model(model, sid, list(preprocess_pashto(text, pre))),
-        }
+        if args.phones_only:
+            variants = {"5_from_phones": run_model(model, sid, ids)}
+        else:
+            variants = {
+                "2_vocoder": real_mel,
+                "3_teacher_forced": run_model(model, sid, ids, duration, pitch, energy),
+                "4_real_durations": run_model(model, sid, ids, duration),
+                "5_from_phones": run_model(model, sid, ids),
+                "6_from_text": run_model(model, sid, list(preprocess_pashto(text, pre))),
+            }
         src = Path(pre["path"]["raw_path"]) / speaker / f"{basename}.wav"
         if src.exists():
             shutil.copy(src, out / f"{basename}_1_original.wav")
@@ -173,6 +181,10 @@ def main():
             results.append(row)
             print(f"  {key:18s} {row['seconds']:6.2f}s  length x{row['length_ratio']:.2f}  "
                   f"mel L1 (DTW) {row['mel_l1_dtw']:.3f}")
+        if args.phones_only:
+            plot([real_mel, variants["5_from_phones"]],
+                 [f"{basename}: real mel", "5 from training phones (model alone)"], out / f"{basename}_mels.png")
+            continue
         plot(list(variants.values()),
              [f"{basename}: real mel (what 2_vocoder plays)", "3 teacher-forced (real durations/pitch/energy)",
               "4 real durations, predicted pitch/energy", "5 from training phones (model alone)",

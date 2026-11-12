@@ -541,6 +541,8 @@ def stage_overfit_test(args):
            "-t", f"config/{DATASET}/train.yaml"]
     if args.clips:
         cmd += ["--clips", *args.clips]
+    if args.phones_only:
+        cmd += ["--phones-only"]
     run(cmd, cwd=args.fs2_dir)
 
 
@@ -609,6 +611,8 @@ def main():
     overfit_opts = argparse.ArgumentParser(add_help=False)
     overfit_opts.add_argument("--step", type=int, help="checkpoint to test (default: latest)")
     overfit_opts.add_argument("--clips", nargs="+", help="only these clips (default: all training clips)")
+    overfit_opts.add_argument("--phones-only", action="store_true",
+                              help="only the original and the output from the training phone sequence (no other versions)")
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="stage", required=True)
