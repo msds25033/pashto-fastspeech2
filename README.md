@@ -15,6 +15,8 @@ fs2_pashto_tools.py      the patches applied to FastSpeech2/ (setup re-applies t
 fs2_overfit_test.py      regenerates the training clips and compares them with the originals
 colab_train.ipynb        Colab notebook: install -> data -> train -> synthesize -> overfit test
 colab_generate.ipynb     Colab notebook: load a trained checkpoint from Google Drive and generate speech (no training)
+colab_inference.ipynb    Colab notebook: phones -> audio, text -> phones, text -> audio (no aligner, no preprocessing)
+tts.py                   load a checkpoint and speak from Python: speak_phones / text_to_phones / speak_text
 requirements.txt         Python packages for training / synthesis
 config/Pashto/           FastSpeech2 configs (preprocess / model / train)
 patches/pashto_cleaners.py   Pashto text cleaner appended to FastSpeech2's text/cleaners.py
@@ -27,6 +29,8 @@ data/
                          pron_overrides.txt (hand-written pronunciations)
   mfa/pashto_acoustic.zip  MFA acoustic model (trained on the 4 demo clips only)
   demo_sentences.txt     the sentences `synthesize` reads by default
+  model/demo4/           stats.json + speakers.json of the demo4 run: what tts.py needs besides the
+                         checkpoint (`train` now also saves them to runs/<run-name>/)
   sources/               the original Word transcripts (the long recordings aren't in git)
 dataset_tools/           how data/ was built (needs the NeMo Pashto G2P model; see below)
 ```

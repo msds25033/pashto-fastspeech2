@@ -360,8 +360,11 @@ def stage_train(args):
     (rd / "config").mkdir(exist_ok=True)
     for name in ("preprocess", "model", "train"):
         shutil.copy(fs2_config(args, name), rd / "config" / f"{name}.yaml")
+    # The model needs these at inference (tts.py / colab_inference.ipynb) without re-preprocessing.
+    for name in ("stats.json", "speakers.json"):
+        shutil.copy(train_txt.parent / name, rd / name)
 
-    cmd = [sys.executable, "train.py", "-p", f"config/{DATASET}/preprocess.yaml",
+    cmd =[sys.executable, "train.py", "-p", f"config/{DATASET}/preprocess.yaml",
            "-m", f"config/{DATASET}/model.yaml", "-t", f"config/{DATASET}/train.yaml"]
     if args.restore_step:
         cmd += ["--restore_step", args.restore_step]
