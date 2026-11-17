@@ -269,10 +269,44 @@ index ae99253..65dbf11 100644
 -)
 +symbols = [_pad] + list(_special) + list(_punctuation) + _pashto + _silences
 diff --git a/train.py b/train.py
-index d1891d3..b4159d4 100644
+index d1891d3..aa6f89a 100644
 --- a/train.py
 +++ b/train.py
-@@ -29,7 +29,10 @@ def main(args, configs):
+@@ -1,5 +1,7 @@
+ import argparse
+ import os
++import sys
++import time
+ 
+ import torch
+ import yaml
+@@ -18,6 +20,25 @@ from evaluate import evaluate
+ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+ 
+ 
++def save_checkpoint(model, optimizer, train_config, step):
++    """Pashto patch: save <step>.pth.tar atomically (a run killed mid-save leaves only a .tmp
++    file), then delete older epoch checkpoints: every save_step one is kept, plus the newest
++    step.keep_last (default 2) of the others."""
++    ckpt_dir = train_config["path"]["ckpt_path"]
++    path = os.path.join(ckpt_dir, "{}.pth.tar".format(step))
++    torch.save(
++        {"model": model.module.state_dict(), "optimizer": optimizer._optimizer.state_dict()},
++        path + ".tmp",
++    )
++    os.replace(path + ".tmp", path)
++    save_step = train_config["step"]["save_step"]
++    keep_last = max(1, train_config["step"].get("keep_last", 2))
++    steps = sorted(int(f.split(".")[0]) for f in os.listdir(ckpt_dir)
++                   if f.endswith(".pth.tar") and f.split(".")[0].isdigit())
++    for s in [s for s in steps if s % save_step != 0][:-keep_last]:
++        os.remove(os.path.join(ckpt_dir, "{}.pth.tar".format(s)))
++
++
+ def main(args, configs):
+     print("Prepare training ...")
+ 
+@@ -29,7 +50,10 @@ def main(args, configs):
      )
      batch_size = train_config["optimizer"]["batch_size"]
      group_size = 4  # Set this larger than 1 to enable sorting in Dataset
@@ -284,7 +318,7 @@ index d1891d3..b4159d4 100644
      loader = DataLoader(
          dataset,
          batch_size=batch_size * group_size,
-@@ -109,6 +112,9 @@ def main(args, configs):
+@@ -109,6 +133,9 @@ def main(args, configs):
                      outer_bar.write(message1 + message2)
  
                      log(train_logger, step, losses=losses)
@@ -294,6 +328,20 @@ index d1891d3..b4159d4 100644
  
                  if step % synth_step == 0:
                      fig, wav_reconstruction, wav_prediction, tag = synth_one_sample(
+@@ -166,6 +193,13 @@ def main(args, configs):
+                 outer_bar.update(1)
+ 
+             inner_bar.update(1)
++        # Pashto patch: epoch checkpoints
++        stop = time.time() > float(os.environ.get("FS2_STOP_AT", "inf"))
++        if train_config["step"].get("save_every_epoch") or stop:
++            save_checkpoint(model, optimizer, train_config, step - 1)
++        if stop:
++            print("\ntime limit reached: stopped after step {}".format(step - 1))
++            sys.exit(0)
+         epoch += 1
+ 
+ 
 diff --git a/utils/model.py b/utils/model.py
 index 45e1f41..b8659b2 100644
 --- a/utils/model.py

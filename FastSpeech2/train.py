@@ -1,5 +1,7 @@
 import argparse
 import os
+import sys
+import time
 
 import torch
 import yaml
@@ -16,6 +18,25 @@ from dataset import Dataset
 from evaluate import evaluate
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def save_checkpoint(model, optimizer, train_config, step):
+    """Pashto patch: save <step>.pth.tar atomically (a run killed mid-save leaves only a .tmp
+    file), then delete older epoch checkpoints: every save_step one is kept, plus the newest
+    step.keep_last (default 2) of the others."""
+    ckpt_dir = train_config["path"]["ckpt_path"]
+    path = os.path.join(ckpt_dir, "{}.pth.tar".format(step))
+    torch.save(
+        {"model": model.module.state_dict(), "optimizer": optimizer._optimizer.state_dict()},
+        path + ".tmp",
+    )
+    os.replace(path + ".tmp", path)
+    save_step = train_config["step"]["save_step"]
+    keep_last = max(1, train_config["step"].get("keep_last", 2))
+    steps = sorted(int(f.split(".")[0]) for f in os.listdir(ckpt_dir)
+                   if f.endswith(".pth.tar") and f.split(".")[0].isdigit())
+    for s in [s for s in steps if s % save_step != 0][:-keep_last]:
+        os.remove(os.path.join(ckpt_dir, "{}.pth.tar".format(s)))
 
 
 def main(args, configs):
@@ -172,6 +193,13 @@ def main(args, configs):
                 outer_bar.update(1)
 
             inner_bar.update(1)
+        # Pashto patch: epoch checkpoints
+        stop = time.time() > float(os.environ.get("FS2_STOP_AT", "inf"))
+        if train_config["step"].get("save_every_epoch") or stop:
+            save_checkpoint(model, optimizer, train_config, step - 1)
+        if stop:
+            print("\ntime limit reached: stopped after step {}".format(step - 1))
+            sys.exit(0)
         epoch += 1
 
 

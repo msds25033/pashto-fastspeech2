@@ -35,6 +35,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -335,6 +336,14 @@ def stage_train(args):
     for (section, key), value in overrides.items():
         if value is not None:
             cfg[section][key] = value
+    if args.save_every_epoch:
+        cfg["step"]["save_every_epoch"] = True
+    if args.keep_last is not None:
+        cfg["step"]["keep_last"] = args.keep_last
+    if args.time_limit:
+        # train.py saves a checkpoint and exits at the first epoch end after this time
+        os.environ["FS2_STOP_AT"] = str(time.time() + args.time_limit * 3600)
+        print(f"time limit: stop (with a checkpoint) after {args.time_limit:.2f} h")
     if cfg["optimizer"]["batch_size"] > n_train:
         print(f"batch_size {cfg['optimizer']['batch_size']} > {n_train} training utterances; "
               f"using {n_train}")
@@ -602,6 +611,12 @@ def main():
     train_opts.add_argument("--overfit", action="store_true",
                             help="switch off dropout (encoder, decoder, variance predictors) so the "
                                  "model memorises its training clips")
+    train_opts.add_argument("--save-every-epoch", action="store_true",
+                            help="also save a checkpoint at the end of every epoch (the save-step ones are "
+                                 "always kept; of the others only the newest --keep-last)")
+    train_opts.add_argument("--keep-last", type=int, help="epoch checkpoints to keep (default 2)")
+    train_opts.add_argument("--time-limit", type=float, metavar="HOURS",
+                            help="stop cleanly, with a checkpoint, at the first epoch end after this many hours")
 
     synth_opts = argparse.ArgumentParser(add_help=False)
     synth_opts.add_argument("--step", type=int, help="checkpoint to use (default: latest)")

@@ -234,6 +234,28 @@ def preprocess_pashto(text, preprocess_config):
 
 '''
 
+TRAIN_SAVE_FN = '''
+
+def save_checkpoint(model, optimizer, train_config, step):
+    """Pashto patch: save <step>.pth.tar atomically (a run killed mid-save leaves only a .tmp
+    file), then delete older epoch checkpoints: every save_step one is kept, plus the newest
+    step.keep_last (default 2) of the others."""
+    ckpt_dir = train_config["path"]["ckpt_path"]
+    path = os.path.join(ckpt_dir, "{}.pth.tar".format(step))
+    torch.save(
+        {"model": model.module.state_dict(), "optimizer": optimizer._optimizer.state_dict()},
+        path + ".tmp",
+    )
+    os.replace(path + ".tmp", path)
+    save_step = train_config["step"]["save_step"]
+    keep_last = max(1, train_config["step"].get("keep_last", 2))
+    steps = sorted(int(f.split(".")[0]) for f in os.listdir(ckpt_dir)
+                   if f.endswith(".pth.tar") and f.split(".")[0].isdigit())
+    for s in [s for s in steps if s % save_step != 0][:-keep_last]:
+        os.remove(os.path.join(ckpt_dir, "{}.pth.tar".format(s)))
+
+'''
+
 # (file, marker that shows the patch is already in, [(old, new), ...])
 PATCHES = [
     ("train.py", "Pashto patch: tiny datasets", [(
@@ -250,6 +272,25 @@ PATCHES = [
         "                        \"Optim/learning_rate\", optimizer._optimizer.param_groups[0][\"lr\"], step\n"
         "                    )\n",
     )]),
+    # Long runs on machines with a session limit (Kaggle): a checkpoint at the end of every
+    # epoch (step.save_every_epoch; only the newest step.keep_last of those are kept, besides
+    # the save_step ones), written atomically, and a clean stop once the unix time in the
+    # FS2_STOP_AT environment variable has passed.
+    ("train.py", "Pashto patch: epoch checkpoints", [
+        ("import argparse\nimport os\n", "import argparse\nimport os\nimport sys\nimport time\n"),
+        ("\n\ndef main(args, configs):",
+         TRAIN_SAVE_FN + "\ndef main(args, configs):"),
+        ("            inner_bar.update(1)\n        epoch += 1\n",
+         "            inner_bar.update(1)\n"
+         "        # Pashto patch: epoch checkpoints\n"
+         "        stop = time.time() > float(os.environ.get(\"FS2_STOP_AT\", \"inf\"))\n"
+         "        if train_config[\"step\"].get(\"save_every_epoch\") or stop:\n"
+         "            save_checkpoint(model, optimizer, train_config, step - 1)\n"
+         "        if stop:\n"
+         "            print(\"\\ntime limit reached: stopped after step {}\".format(step - 1))\n"
+         "            sys.exit(0)\n"
+         "        epoch += 1\n"),
+    ]),
     # Energy targets reach the loss as float64 (normalised values become float64 under
     # NumPy 2) while predictions are float32 -> "Found dtype Double but expected Float" in
     # backward on CUDA. Pitch already had .float(); give energy the same.

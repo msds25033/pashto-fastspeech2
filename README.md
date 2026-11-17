@@ -16,6 +16,8 @@ fs2_overfit_test.py      regenerates the training clips and compares them with t
 colab_train.ipynb        Colab notebook: install -> data -> train -> synthesize -> overfit test
 colab_generate.ipynb     Colab notebook: load a trained checkpoint from Google Drive and generate speech (no training)
 colab_inference.ipynb    Colab notebook: phones -> audio, text -> phones, text -> audio (no aligner, no preprocessing)
+kaggle_train.ipynb       Kaggle notebook: train on all clips over several 12 h sessions (runs kaggle_train.py)
+kaggle_train.py          restore the last session -> align/preprocess once -> train with epoch checkpoints + time limit
 tts.py                   load a checkpoint and speak from Python: speak_phones / text_to_phones / speak_text
 requirements.txt         Python packages for training / synthesis
 config/Pashto/           FastSpeech2 configs (preprocess / model / train)
@@ -174,6 +176,22 @@ python pipeline.py overfit-test --run-name demo4          # latest checkpoint; c
 - **Rough timing on a T4:** about 1–1.5 s per step at batch size 16, so 15–35 hours for
   50k–100k steps. A usable voice often appears around 20k–30k steps.
   On a CPU it is about 22 s per step even with only 4 clips, so train on a GPU.
+
+### On Kaggle (`kaggle_train.ipynb`)
+
+Kaggle GPU sessions end after 12 h, so `kaggle_train.py` trains over several sessions. Import
+`kaggle_train.ipynb` into Kaggle (GPU T4 x2, Internet on) and run it with **Save & Run All
+(Commit)**. Its first cell has the instructions. Each session:
+
+- restores the previous session's output (attached with *Add Input*) from `/kaggle/input`:
+  checkpoints, logs, features and `runs/full/`;
+- the first session only: aligns all clips with a newly trained aligner model and preprocesses them;
+- trains with `train --save-every-epoch --keep-last 2 --time-limit <hours left>`. It saves
+  a checkpoint at every epoch end and keeps every 10000th step plus the newest 2 others.
+  It stops itself, with a checkpoint, about 15 min before `--hours` runs out, so Kaggle
+  saves `/kaggle/working`.
+
+`--save-every-epoch`, `--keep-last` and `--time-limit` work on any machine, Colab included.
 
 ## Changes to FastSpeech2 and the configs
 
