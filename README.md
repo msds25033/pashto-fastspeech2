@@ -17,7 +17,8 @@ colab_train.ipynb        Colab notebook: install -> data -> train -> synthesize 
 colab_generate.ipynb     Colab notebook: load a trained checkpoint from Google Drive and generate speech (no training)
 colab_inference.ipynb    Colab notebook: phones -> audio, text -> phones, text -> audio (no aligner, no preprocessing)
 kaggle_train.ipynb       Kaggle notebook: train on all clips over several 12 h sessions (runs kaggle_train.py)
-kaggle_train.py          restore the last session -> align/preprocess once -> train with epoch checkpoints + time limit
+kaggle_train.py          restore the last session -> preprocess once -> train with epoch checkpoints + time limit (--smoke: test)
+colab_align.ipynb        Colab notebook (CPU): train the aligner on a sample, align all clips -> pashto_aligned.zip for Kaggle
 tts.py                   load a checkpoint and speak from Python: speak_phones / text_to_phones / speak_text
 requirements.txt         Python packages for training / synthesis
 config/Pashto/           FastSpeech2 configs (preprocess / model / train)
@@ -177,21 +178,28 @@ python pipeline.py overfit-test --run-name demo4          # latest checkpoint; c
   50k–100k steps. A usable voice often appears around 20k–30k steps.
   On a CPU it is about 22 s per step even with only 4 clips, so train on a GPU.
 
-### On Kaggle (`kaggle_train.ipynb`)
+### On Kaggle (`colab_align.ipynb`, then `kaggle_train.ipynb`)
 
-Kaggle GPU sessions end after 12 h, so `kaggle_train.py` trains over several sessions. Import
-`kaggle_train.ipynb` into Kaggle (GPU T4 x2, Internet on) and run it with **Save & Run All
-(Commit)**. Its first cell has the instructions. Each session:
+Kaggle GPU sessions end after 12 h, so `kaggle_train.py` trains over several sessions.
 
-- restores the previous session's output (attached with *Add Input*) from `/kaggle/input`:
-  checkpoints, logs, features and `runs/full/`;
-- the first session only: aligns all clips with a newly trained aligner model and preprocesses them;
-- trains with `train --save-every-epoch --keep-last 2 --time-limit <hours left>`. It saves
-  a checkpoint at every epoch end and keeps every 10000th step plus the newest 2 others.
-  It stops itself, with a checkpoint, about 15 min before `--hours` runs out, so Kaggle
-  saves `/kaggle/working`.
+1. **Align first, on CPU:** `colab_align.ipynb` (Colab CPU runtime) trains an aligner model on
+   `--sample 200` clips, aligns all 759 clips with it, and gives `pashto_aligned.zip` (the TextGrids
+   plus `runs/full/pashto_acoustic.zip`). The aligner doesn't use the GPU, and with all clips it
+   didn't finish within a 12 h Kaggle session. Upload the zip to Kaggle as a dataset.
+2. **Smoke test:** in `kaggle_train.ipynb`, attach the dataset, keep `SMOKE_TEST = True` and run it
+   interactively. It preprocesses, trains for about 5 min into `/kaggle/temp/smoke`, and prints a checklist.
+3. **Train:** `SMOKE_TEST = False`, then **Save & Run All (Commit)**. Each session:
+   - restores the previous session's output from `/kaggle/input` (attach it with *Add Input*):
+     checkpoints, logs, features and `runs/full/`;
+   - preprocesses from the alignments if there are no features yet (first session);
+   - trains with `train --save-every-epoch --keep-last 2 --time-limit <hours left>`, saving a
+     checkpoint at every epoch end and keeping every 10000th step plus the newest 2 others. It
+     stops itself, with a checkpoint, about 15 min before `--hours`, so Kaggle saves
+     `/kaggle/working`. Keep `--hours` below your remaining weekly GPU quota.
 
-`--save-every-epoch`, `--keep-last` and `--time-limit` work on any machine, Colab included.
+`--save-every-epoch`, `--keep-last` and `--time-limit` work on any machine, Colab included. `align`
+now passes `--single_speaker` to MFA. Without it, MFA splits the work by speaker, so with one
+speaker it used only one of the `--jobs` processes.
 
 ## Changes to FastSpeech2 and the configs
 

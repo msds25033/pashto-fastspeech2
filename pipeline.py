@@ -194,6 +194,8 @@ def select_rows(args):
                 if any(fnmatch.fnmatch(Path(r[0]).stem, pat) or r[0] == pat for pat in args.clips)]
     if not rows:
         sys.exit(f"no clips in metadata.csv match {args.clips}")
+    if getattr(args, "sample", None) and args.sample < len(rows):
+        rows = [rows[i * len(rows) // args.sample] for i in range(args.sample)]
     return rows
 
 
@@ -226,15 +228,16 @@ def stage_align(args):
     mfa = mfa_command(args)
     # Options go AFTER the positional arguments: MFA passes unknown options such as
     # --beam through to its config, and before the positionals their values would
-    # be taken as the corpus directory.
+    # be taken as the corpus directory. --single_speaker: MFA splits the work between the
+    # --jobs processes by speaker, so with one speaker it would use only one process.
     if args.train_acoustic:
         model_out = run_dir(args) / "pashto_acoustic.zip"
         run([*mfa, "train", corpus, lexicon, model_out, "--output_directory", out,
-             "--clean", "-j", args.jobs])
+             "--clean", "-j", args.jobs, "--single_speaker"])
         print(f"new acoustic model saved to {model_out} (copy it to data/mfa/ to reuse it)")
     else:
         run([*mfa, "align", corpus, lexicon, args.acoustic_model, out,
-             "--clean", "-j", args.jobs, "--beam", "100", "--retry_beam", "400"])
+             "--clean", "-j", args.jobs, "--single_speaker", "--beam", "100", "--retry_beam", "400"])
 
     # FastSpeech2 expects TextGrid/<speaker>/<clip>.TextGrid
     (out / args.speaker).mkdir(parents=True, exist_ok=True)
@@ -581,6 +584,8 @@ def main():
     corpus_opts = argparse.ArgumentParser(add_help=False)
     corpus_opts.add_argument("--clips", nargs="+",
                              help='clips to use: names or patterns, e.g. "1_crop-00[1-4]" (default: all)')
+    corpus_opts.add_argument("--sample", type=int, metavar="N",
+                             help="only N clips, spread evenly over all recordings (e.g. to train the aligner faster)")
 
     align_opts = argparse.ArgumentParser(add_help=False)
     align_opts.add_argument("--mfa", help='command that runs MFA, e.g. "conda run -n aligner mfa" '
