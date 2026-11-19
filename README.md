@@ -17,7 +17,7 @@ colab_train.ipynb        Colab notebook: install -> data -> train -> synthesize 
 colab_generate.ipynb     Colab notebook: load a trained checkpoint from Google Drive and generate speech (no training)
 colab_inference.ipynb    Colab notebook: phones -> audio, text -> phones, text -> audio (no aligner, no preprocessing)
 kaggle_train.ipynb       Kaggle notebook: train on all clips over several 12 h sessions (runs kaggle_train.py)
-kaggle_train.py          restore the last session -> preprocess once -> train with epoch checkpoints + time limit (--smoke: test)
+kaggle_train.py          pull from the HF Hub -> preprocess once -> train in <= 6 h sessions, pushing checkpoints (--smoke: test + time estimate)
 colab_align.ipynb        Colab notebook (CPU): train the aligner on a sample, align all clips -> pashto_aligned.zip for Kaggle
 tts.py                   load a checkpoint and speak from Python: speak_phones / text_to_phones / speak_text
 requirements.txt         Python packages for training / synthesis
@@ -182,20 +182,31 @@ python pipeline.py overfit-test --run-name demo4          # latest checkpoint; c
 
 Kaggle GPU sessions end after 12 h, so `kaggle_train.py` trains over several sessions.
 
-1. **Align first, on CPU:** `colab_align.ipynb` (Colab CPU runtime) trains an aligner model on
-   `--sample 200` clips, aligns all 759 clips with it, and gives `pashto_aligned.zip` (the TextGrids
-   plus `runs/full/pashto_acoustic.zip`). The aligner doesn't use the GPU, and with all clips it
-   didn't finish within a 12 h Kaggle session. Upload the zip to Kaggle as a dataset.
-2. **Smoke test:** in `kaggle_train.ipynb`, attach the dataset, keep `SMOKE_TEST = True` and run it
-   interactively. It preprocesses, trains for about 5 min into `/kaggle/temp/smoke`, and prints a checklist.
-3. **Train:** `SMOKE_TEST = False`, then **Save & Run All (Commit)**. Each session:
-   - restores the previous session's output from `/kaggle/input` (attach it with *Add Input*):
-     checkpoints, logs, features and `runs/full/`;
-   - preprocesses from the alignments if there are no features yet (first session);
-   - trains with `train --save-every-epoch --keep-last 2 --time-limit <hours left>`, saving a
-     checkpoint at every epoch end and keeping every 10000th step plus the newest 2 others. It
-     stops itself, with a checkpoint, about 15 min before `--hours`, so Kaggle saves
-     `/kaggle/working`. Keep `--hours` below your remaining weekly GPU quota.
+1. **Alignments:** use the wav2vec2 ones (`dataset_tools/ctc_to_textgrids.py`, see
+   "Rebuilding the dataset"), which runs locally in ~2 minutes:
+   ```bash
+   python dataset_tools/ctc_to_textgrids.py --ctc-dir ../pashto_dataset/textgrids \
+       --out outputs/ctc_textgrids --zip outputs/pashto_aligned_ctc.zip
+   ```
+   Upload the zip as `pashto_aligned.zip` (HF repo or Kaggle dataset).
+   MFA trained from scratch on this data (`colab_align.ipynb`) gave unusable alignments: speech
+   labelled as silence, and on the ~30 s clips words placed in the pauses.
+2. **Hugging Face Hub:** training state lives in a private model repo (default
+   `speech-itu/pashto-fastspeech2`). It holds `pashto_aligned.zip` (you upload it once),
+   `features.tar` (pushed by the first session), `ckpt/<step>.pth.tar` (every 10000th plus the newest),
+   `log/` and `runs/full/`. The token is a Kaggle secret, `HF_TOKEN`, with write access to the org.
+3. **Smoke test:** in `kaggle_train.ipynb`, keep `SMOKE_TEST = True` and run it interactively. It
+   pulls/preprocesses, trains for `SMOKE_MINUTES`, pushes to `smoke/` in the repo every minute, checks a
+   checkpoint downloads back, deletes `smoke/`, and prints a checklist and a **time estimate**:
+   steps/hour, steps per session, and sessions/weeks for 20k/50k/100k steps.
+4. **Train:** `SMOKE_TEST = False`, then **Save & Run All (Commit)**, once per session. Each session
+   (at most `--hours`, default 6):
+   - pulls the newest checkpoint, logs, `runs/full/` and the features (or the alignments) from the Hub;
+   - first session only: preprocesses from the alignments and pushes `features.tar`;
+   - trains with `train --save-every-epoch --time-limit <hours left>` (a checkpoint on disk at
+     every epoch end), pushes the newest checkpoint every `--push-minutes` (30), and stops itself
+     about 25 min before `--hours`, then makes a final push. Old checkpoint versions are squashed
+     out of the repo history to keep its storage down.
 
 `--save-every-epoch`, `--keep-last` and `--time-limit` work on any machine, Colab included. `align`
 now passes `--single_speaker` to MFA. Without it, MFA splits the work by speaker, so with one
@@ -262,5 +273,16 @@ It runs, per recording:
 
 Then, once for everything, `make_lexicon.py` builds the word→phone lexicon,
 mapping rare G2P phones into the 37-phone set.
-`align_chunks.py` (per-clip wav2vec2 TextGrids) is kept for reference; the
-FastSpeech2 pipeline uses MFA instead.
+`align_chunks.py` (per-clip wav2vec2 TextGrids) is kept for reference.
+
+`ctc_to_textgrids.py` turns the per-clip wav2vec2 TextGrids (one 20 ms spike per phoneme,
+labelled with the aligner's tokens) into FastSpeech2 TextGrids. It runs locally, no G2P needed:
+- Each clip's transcript goes through the lexicon to get its phones. These are matched
+  character by character to the timed tokens; unmatched phones are interpolated.
+- Each phone lasts until the next one starts. Quiet stretches become `sp`, and so do unvoiced
+  breaths/noise that a phone would otherwise absorb.
+- Where a phone is still too long (voiced speech missing from the transcript, or sung/recited
+  passages), the clip keeps only its longest clean stretch. The rest is labelled `sp`, which
+  `preprocess.py` trims off.
+
+On the 759 clips: 756 kept, 228 of them trimmed, 3 dropped, 86% of the speech kept.

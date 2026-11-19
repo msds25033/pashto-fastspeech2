@@ -18,3 +18,5 @@ runs/*/audio/*.png
 __pycache__/
 *.pyc
 _g2p_tmp*/
+
+outputs/ctc_textgrids/

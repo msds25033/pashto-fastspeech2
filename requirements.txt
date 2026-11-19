@@ -16,4 +16,5 @@ unidecode
 inflect
 g2p_en
 pypinyin
+huggingface_hub  # checkpoints on the Hugging Face Hub (kaggle_train.py)
 # Montreal Forced Aligner is installed separately (conda): `python pipeline.py install-mfa` on Colab/Linux
