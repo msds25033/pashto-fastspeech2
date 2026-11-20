@@ -188,7 +188,8 @@ Kaggle GPU sessions end after 12 h, so `kaggle_train.py` trains over several ses
    python dataset_tools/ctc_to_textgrids.py --ctc-dir ../pashto_dataset/textgrids \
        --out outputs/ctc_textgrids --zip outputs/pashto_aligned_ctc.zip
    ```
-   Upload the zip as `pashto_aligned.zip` (HF repo or Kaggle dataset).
+   Copy it to `data/pashto_aligned.zip` and commit it (4 MB). The first Kaggle session creates the
+   private HF repo and uploads it there.
    MFA trained from scratch on this data (`colab_align.ipynb`) gave unusable alignments: speech
    labelled as silence, and on the ~30 s clips words placed in the pauses.
 2. **Hugging Face Hub:** training state lives in a private model repo (default

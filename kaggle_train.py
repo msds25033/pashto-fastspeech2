@@ -5,8 +5,8 @@ with everything a session needs to continue kept in a Hugging Face model repo
 (--hf-repo, default speech-itu/pashto-fastspeech2). Used by kaggle_train.ipynb.
 
 The Hugging Face repo (private; created on first use) holds:
-    pashto_aligned.zip   the alignments (from colab_align.ipynb), uploaded once by you,
-                         or attach it to the notebook as a Kaggle dataset instead
+    pashto_aligned.zip   the alignments; the first session uploads data/pashto_aligned.zip
+                         from this git repo (dataset_tools/ctc_to_textgrids.py --zip)
     features.tar         the preprocessed features, pushed by the first session
     ckpt/<step>.pth.tar  checkpoints: every save_step-th (10000) one + the newest
     log/                 TensorBoard logs
@@ -89,6 +89,14 @@ class Hub:
 
     def files(self):
         return self.api.list_repo_files(self.repo)
+
+    def seed_alignments(self, path):
+        """First use of the repo: upload the alignments that ship with the git repo."""
+        if "pashto_aligned.zip" in self.files() or not path.exists():
+            return
+        print(f"uploading {path.name} to the Hub (first use of the repo) ...", flush=True)
+        self.api.upload_file(path_or_fileobj=str(path), path_in_repo="pashto_aligned.zip",
+                             repo_id=self.repo, commit_message="alignments")
 
     def remote_ckpts(self, files):
         out = {}
@@ -263,6 +271,7 @@ def main():
     hub = Hub(args.hf_repo, "smoke/" if args.smoke else "", save_step, args.run_name)
 
     # 2. pull the newest state (+ features or alignments)
+    hub.seed_alignments(REPO / "data" / "pashto_aligned.zip")
     hub.pull(work)
     if args.input.exists():
         restore_inputs(args.input, work)
@@ -271,8 +280,9 @@ def main():
     # 3. first session: features from the alignments
     if not (pashto / "train.txt").exists():
         if not any(pashto.glob("TextGrid/*/*.TextGrid")):
-            sys.exit(f"no alignments: upload pashto_aligned.zip (from colab_align.ipynb) to "
-                     f"https://huggingface.co/{args.hf_repo}, or attach it as a Kaggle dataset.")
+            sys.exit(f"no alignments: commit data/pashto_aligned.zip (dataset_tools/ctc_to_textgrids.py "
+                     f"--zip) to the git repo, upload it to https://huggingface.co/{args.hf_repo}, "
+                     f"or attach it as a Kaggle dataset.")
         pipeline("corpus")      # the clips as 22.05 kHz wav + text, which preprocess reads
         pipeline("preprocess")
         hub.push_features(work)
