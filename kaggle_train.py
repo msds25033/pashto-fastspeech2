@@ -83,7 +83,18 @@ class Hub:
                      "as a Kaggle secret called HF_TOKEN (see the notebook).")
         self.api, self.repo, self.prefix = HfApi(token=token), repo_id, prefix
         self.save_step, self.run_name = save_step, run_name
-        self.api.create_repo(repo_id, private=True, exist_ok=True)
+        try:
+            self.api.create_repo(repo_id, private=True, exist_ok=True)
+        except Exception as e:
+            # A token that may write to the org's repos but not create new ones is fine
+            # once the repo exists (create it on the website).
+            try:
+                self.api.repo_info(repo_id)
+            except Exception:
+                sys.exit(f"cannot create the Hugging Face repo {repo_id} ({e}).\n"
+                         f"Create it on huggingface.co (New -> Model, owner = the org, Private), or use "
+                         f"a token whose account may create repos in the org, or set HF_REPO to "
+                         f"<your username>/pashto-fastspeech2.")
         print(f"Hugging Face repo: https://huggingface.co/{repo_id}" + (f" (under {prefix})" if prefix else ""))
         self.pushed_step = None
 
