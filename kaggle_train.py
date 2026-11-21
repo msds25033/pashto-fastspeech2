@@ -267,6 +267,15 @@ def main():
     ap.add_argument("--work", type=Path, default=Path("/kaggle/working"))
     ap.add_argument("--input", type=Path, default=Path("/kaggle/input"))
     args = ap.parse_args()
+    # The GPU check that matters: PyTorch's. (TensorFlow, imported by TensorBoard, prints
+    # "Could not find cuda drivers ... GPU will not be used" on Kaggle; that is about TF only.)
+    gpu = subprocess.run([sys.executable, "-c", "import torch; print(torch.cuda.is_available(), torch.cuda.device_count(), "
+                          "torch.cuda.get_device_name(0) if torch.cuda.is_available() else '-', torch.__version__)"],
+                         capture_output=True, text=True).stdout.split()
+    print(f"PyTorch GPU: available={gpu[0] if gpu else '?'} count={gpu[1] if gpu else '?'} "
+          f"name={' '.join(gpu[2:-1]) if gpu else '?'} torch={gpu[-1] if gpu else '?'}", flush=True)
+    if not gpu or gpu[0] != "True":
+        sys.exit("PyTorch sees no GPU: set Accelerator = GPU T4 x2 in the notebook's Session options.")
     work = Path("/kaggle/temp/smoke") if args.smoke else args.work
     if args.smoke:
         shutil.rmtree(work, ignore_errors=True)
